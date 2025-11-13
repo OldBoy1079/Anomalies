@@ -8,12 +8,11 @@ import pickle
 
 
 def derive(data):
-
     '''
-    Создает список производных SOH одной ячейки
+    Вычисляет производные (разности) значений SOH между соседними циклами
 
-    :param data: список SOH ячейки размера n
-    :return: список производных SOH размера n-1
+    :param data: список значений SOH ячейки размера n
+    :return: список производных SOH размера n-1, где каждый элемент - разность между текущим и предыдущим значением
     '''
 
     d=[]
@@ -24,9 +23,8 @@ def derive(data):
 
 
 def compare(data1, data2, soh1, soh2):
-
     '''
-    Обнаруживает циклы, на которых происходит падение SOH
+    Сравнивает производные SOH двух ячеек и обнаруживает циклы с аномальным падением SOH
 
     :param data1: список производных SOH эталонной ячейки
     :param data2: список производных SOH проверяемой ячейки
@@ -56,10 +54,10 @@ def compare(data1, data2, soh1, soh2):
 def select(d):
 
     '''
-    Отфильтровывает только те аномалии, где падение SOH составляет 1% или более
+    Фильтрует аномалии, оставляя только те, где падение SOH составляет 1% или более
 
-    :param d: output функции compare(data1, data2, soh1, soh2)
-    :return: output функции compare(data1, data2, soh1, soh2), где x >= 1
+    :param d: результат работы функции compare()
+    :return: отфильтрованный список аномалий с падением SOH >= 1%
     '''
 
     p=[]
@@ -72,9 +70,9 @@ def select(d):
 def events_extract(k, data):
 
     '''
-    Извлекает данные за 10 циклов до аномалии
+    Извлекает данные за 10 циклов до момента обнаружения аномалии
 
-    :param k: output функции select(d)
+    :param k: отфильтрованные аномалии (результат select())
     :param data: полные данные проверяемой ячейки
     :return: список вида:
     o = [
@@ -99,7 +97,7 @@ def events_extract(k, data):
         [Ic_10, Id_10, Vc_10, Vd_10, Tc_10, Td_10, charge_policy_10]  # Цикл N-1
     ])
     где
-    Ic_i, Id_i, Vc_i, Vd_i, Tc_i, Td_i - списки измеренных данных на i-ом цикле
+    Ic_i, Id_i, Vc_i, Vd_i, Tc_i, Td_i - списки измеренных данных на (N-11+i)-ом цикле
     charge_policy_i - политика заряда на i-ом цикле
     '''
 
@@ -120,7 +118,7 @@ def getEvents(data1, data2):
 
     :param data1: данные эталонной ячейки
     :param data2: данные проверяемой ячейки
-    :return: output функции events_extract(k, data)
+    :return: результат events_extract() - список с данными циклов и метаданными аномалий
     '''
 
     dtrue_values = derive(data1["SOH"])
@@ -131,34 +129,107 @@ def getEvents(data1, data2):
     return o
 
 
-
 def compare_graphs(d1,d2):
+    '''
+    Сравнивает два графика/набора данных с помощью корреляции
+
+    :param d1: первый набор данных
+    :param d2: второй набор данных
+    :return: True если корреляция >= 0.93, иначе False
+    '''
+
     size=min(len(d1),len(d2))
     corr = np.corrcoef(d1[0:size], d2[0:size])[0, 1]
     return corr>=0.93
 
 
 def equal(d1,d2):
+    '''
+    Проверяет полное равенство двух наборов данных
+
+    :param d1: первый набор данных
+    :param d2: второй набор данных
+    :return: True если все элементы равны, иначе False
+    '''
+
     return (d1[0]==d2[0] and d1[1]==d2[1] and  d1[2]==d2[2] and d1[3]==d2[3] and d1[4]==d2[4] and d1[5]==d2[5])
 
 
 def createdf(data1,data2):
+    '''
+    Создает структурированные данные об аномалиях с привязкой к циклам
+
+    :param data1: данные эталонной ячейки
+    :param data2: данные проверяемой ячейки
+    :return: кортеж (datat, result):
+        - datat: данные циклов с номерами циклов
+        datat: [
+            [  # Событие 1 на цикле N1
+                (данные_цикла_N1-10, N1-10),
+                (данные_цикла_N1-9, N1-9),
+                ...
+                (данные_цикла_N1-1, N1-1)
+            ],
+            [  # Событие 2 на цикле N2
+                (данные_цикла_N2-10, N2-10),
+                (данные_цикла_N2-9, N2-9),
+                ...
+                (данные_цикла_N2-1, N2-1)
+            ],
+            ...
+        ]
+        - result: список процентов падения SOH для каждого события
+    '''
+
     events=getEvents(data1,data2)
     s=0
     datat=[]
     result=[]
     for i in range(0,len(events),2):
         data=[]
-        s=(events[i+1][0])-10
+        s=(events[i+1][0])-10 # начальный цикл - за 10 циклов до падения
+                              # (events[i+1][0]) - номер цикла падения
         for j in range(len(events[i])):
-            data.append((events[i][j],s))
+            data.append((events[i][j],s)) # (данные цикла, номер цикла)
             s=s+1
         result.append(events[i+1][1])
         datat.append(data)
-    return datat,result
+    return datat, result
 
 
 def getd(df_midum, ic, id, vc, vd, tc, td):
+    '''
+    Обрабатывает данные циклов, присваивая уникальные идентификаторы схожим графикам
+
+    :param df_midum: DataFrame с данными циклов
+    :param ic, id, vc, vd, tc, td: списки для хранения уникальных графиков каждого типа измерений
+    :return: обработанные данные с присвоенными идентификаторами графиков
+    Total_data_m = [
+        Событие 1
+        [
+            Цикл 1:
+            ("ic2", "id5", "vc1", "vd3", "tc0", "td2", 40),
+
+            Цикл 2:
+            ("ic2", "id5", "vc1", "vd3", "tc1", "td2", 41),
+
+            Цикл 3:
+            ("ic3", "id5", "vc1", "vd4", "tc1", "td2", 42),
+
+            ...  Всего 10 циклов
+        ],
+
+        Событие 2
+        [
+            ("ic0", "id3", "vc2", "vd1", "tc0", "td0", 75),
+            ("ic0", "id3", "vc2", "vd1", "tc0", "td0", 76),
+            ... Всего 10 циклов
+        ]
+        ... другие события ...
+    ]
+    '''
+
+    # df_midum["data"][i][j] = (array([Ic, Id, Vc, Vd, Tc, Td, charge_policy]), номер_цикла)
     Total_data_m = []
     for i in range(len(df_midum)):
         data = []
@@ -230,6 +301,16 @@ def getd(df_midum, ic, id, vc, vd, tc, td):
 
 
 def getting_db(data1, data2, ic, id, vc, vd, tc, td):
+    '''
+    Обрабатывает пару ячеек и распределяет аномалии по категориям тяжести
+
+    :param data1: эталонная ячейка
+    :param data2: проверяемая ячейка
+    :param ic, id, vc, vd, tc, td: списки уникальных графиков
+    :return: кортеж с данными аномалий трех категорий тяжести,
+             где каждый элемент - результат getd()
+    '''
+
     datat, result = createdf(data1, data2)
     df = pd.DataFrame({"data": datat, "result": result})
     soh_bins = [1, 9, 14, np.inf]
@@ -242,6 +323,25 @@ def getting_db(data1, data2, ic, id, vc, vd, tc, td):
     df_midum = df_midum.reset_index(drop=True)
     df_high = df_high.reset_index(drop=True)
 
+    # df_low - датафрейм вида:
+    #    data                   result
+    # 0  данные_циклов_1        'low'
+    # 1  данные_циклов_2        'low'
+    # 2  ...                    ...
+
+    # df_midum - датафрейм вида:
+    #    data                   result
+    # 0  данные_циклов_1        'midum'
+    # 1  данные_циклов_2        'midum'
+    # 2  ...                    ...
+
+    # df_high - датафрейм вида:
+    #    data                   result
+    # 0  данные_циклов_1        'high'
+    # 1  данные_циклов_2        'high'
+    # 2  ...                    ...
+
+
     datal = getd(df_low, ic, id, vc, vd, tc, td)
 
     datam = getd(df_midum, ic, id, vc, vd, tc, td)
@@ -252,6 +352,15 @@ def getting_db(data1, data2, ic, id, vc, vd, tc, td):
 
 
 def getS(dataT, dataF):
+    '''
+    Обрабатывает множество проверяемых ячеек относительно одной эталонной
+
+    :param dataT: эталонная ячейка
+    :param dataF: список проверяемых ячеек
+    :return: кортеж с данными аномалий всех категорий и списками уникальных графиков,
+             где данные аномалий - результат getting_db
+    '''
+
     datam = pd.DataFrame()
     datal = pd.DataFrame()
     datah = pd.DataFrame()
@@ -274,6 +383,15 @@ def getS(dataT, dataF):
 
 
 def transfer(df_final):
+    '''
+    Преобразует данные в формат с уникальными идентификаторами событий
+
+    :param df_final: исходные данные циклов
+    :return: кортеж (all_data, names):
+        - all_data: преобразованные данные с идентификаторами 'Е'
+        - names: список уникальных событий/графиков
+    '''
+
     names=[df_final[0][0]]
     all_data=[]
     for i in range(len(df_final)):
@@ -294,8 +412,10 @@ def transfer(df_final):
 
 data = np.load('celles.npy', allow_pickle=True)
 
+
+
 dataf = []
-for i in range(len(data) - 10):
+for i in range(len(data)):
     if i != 117:
         dataf.append(data[i])
 df_final1, df_final2, df_final3, ic, id, vc, vd, tc, td = getS(data[117], dataf)
